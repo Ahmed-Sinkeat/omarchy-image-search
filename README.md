@@ -1,5 +1,7 @@
 # omarchy-image-search
 
+[![CI](https://github.com/Ahmed-Sinkeat/omarchy-image-search/actions/workflows/ci.yml/badge.svg)](https://github.com/Ahmed-Sinkeat/omarchy-image-search/actions/workflows/ci.yml)
+
 Select a region of your screen and reverse-image-search it with Google Lens, on
 [Omarchy](https://omarchy.org) / Hyprland.
 

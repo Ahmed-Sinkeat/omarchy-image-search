@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Lint
+        run: shellcheck omarchy-capture-image-search install.sh test-image-search.sh
+
+      - name: Parse
+        run: |
+          for script in omarchy-capture-image-search install.sh test-image-search.sh; do
+            bash -n "$script"
+          done
+
+      - name: Test
+        run: ./test-image-search.sh

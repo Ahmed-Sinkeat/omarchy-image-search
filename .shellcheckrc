@@ -1,0 +1,3 @@
+# Stub bodies and the detached cleanup command are written as literal shell
+# source; expanding them in the parent shell is exactly what must not happen.
+disable=SC2016
