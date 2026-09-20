@@ -33,13 +33,16 @@ stub grim \
   'printf "%s\n" "${@: -1}" >"$CAPTURE_PATH_LOG"' \
   'printf "fake-png" >"${@: -1}"'
 stub omarchy-launch-browser \
-  'kill -0 "$FREEZE_PROCESS" 2>/dev/null && { echo "freeze still alive at browser launch" >&2; exit 90; }' \
+  'if [[ -n ${FREEZE_PROCESS:-} ]] && kill -0 "$FREEZE_PROCESS" 2>/dev/null; then' \
+  '  echo "freeze still alive at browser launch" >&2; exit 90' \
+  'fi' \
   'printf "browser %s\n" "$*" >>"$LOG_FILE"' \
   '[[ ${BROWSER_FAIL:-false} == true ]] && exit 1' \
   'page=${@: -1}; [[ $page == file://* ]] && cp "${page#file://}" "$PAGE_COPY"' \
   'exit 0'
 stub omarchy-notification-send 'printf "notify %s\n" "$*" >>"$LOG_FILE"'
 stub magick 'printf "magick %s\n" "$*" >>"$LOG_FILE"' 'cp "$1" "${@: -1}"'
+stub wl-paste 'printf "%s" "${CLIP_PAYLOAD:-}"'
 stub curl \
   'printf "curl %s\n" "$*" >>"$LOG_FILE"' \
   '[[ ${BING_EMPTY:-false} == true ]] && exit 0' \
@@ -63,11 +66,25 @@ export CAPTURE_PATH_LOG="$TEST_DIR/capture-path"
 export PAGE_COPY="$TEST_DIR/page.html"
 export LENS_PAGE_TTL=0
 
-start_freeze() {
+reset_logs() {
   : >"$LOG_FILE"
   rm -f "$PAGE_COPY"
+}
+
+start_freeze() {
+  reset_logs
   sleep 60 &
   FREEZE_PROCESS=$!
+  export FREEZE_PROCESS
+}
+
+# Sources other than a screen capture never freeze the desktop.
+no_freeze() {
+  reset_logs
+  if [[ -n ${FREEZE_PROCESS:-} ]]; then
+    kill "$FREEZE_PROCESS" 2>/dev/null || true
+  fi
+  FREEZE_PROCESS=""
   export FREEZE_PROCESS
 }
 
@@ -152,5 +169,50 @@ grep -F 'Could not resize the capture' "$LOG_FILE" >/dev/null
 grep -E -- 'browser file:///' "$LOG_FILE" >/dev/null
 grep -F 'atob("ZmFrZS1wbmc=")' "$PAGE_COPY" >/dev/null
 stub magick 'printf "magick %s\n" "$*" >>"$LOG_FILE"' 'cp "$1" "${@: -1}"'
+
+# --- --file must not consume the caller's file -----------------------------
+no_freeze
+SOURCE_IMAGE="$TEST_DIR/source.png"
+printf 'from-file' >"$SOURCE_IMAGE"
+"$SCRIPT" --file "$SOURCE_IMAGE"
+[[ -f $SOURCE_IMAGE ]] || { echo "--file deleted the caller's image" >&2; exit 1; }
+[[ $(<"$SOURCE_IMAGE") == from-file ]] || { echo "--file modified the caller's image" >&2; exit 1; }
+grep -F "atob(\"$(printf 'from-file' | base64 -w0)\")" "$PAGE_COPY" >/dev/null
+refute 'omarchy-capture-region' "--file must not open the region selector"
+[[ -z $(find "$XDG_RUNTIME_DIR" -name 'omarchy-image-search.*.png') ]] ||
+  { echo "--file left a copy behind" >&2; exit 1; }
+
+# --- --file on a missing path ----------------------------------------------
+no_freeze
+if "$SCRIPT" --file "$TEST_DIR/not-here.png"; then
+  echo "missing --file path unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -F 'Could not read' "$LOG_FILE" >/dev/null
+
+# --- --file with no argument -----------------------------------------------
+no_freeze
+if "$SCRIPT" --file; then
+  echo "--file without a path unexpectedly succeeded" >&2
+  exit 1
+fi
+
+# --- --clipboard ------------------------------------------------------------
+no_freeze
+CLIP_PAYLOAD=from-clip
+export CLIP_PAYLOAD
+"$SCRIPT" --clipboard
+grep -F "atob(\"$(printf 'from-clip' | base64 -w0)\")" "$PAGE_COPY" >/dev/null
+refute 'omarchy-capture-region' "--clipboard must not open the region selector"
+
+# --- --clipboard with an empty clipboard ------------------------------------
+no_freeze
+CLIP_PAYLOAD=""
+if "$SCRIPT" --clipboard; then
+  echo "empty clipboard unexpectedly succeeded" >&2
+  exit 1
+fi
+unset CLIP_PAYLOAD
+grep -F 'No image in the clipboard' "$LOG_FILE" >/dev/null
 
 echo "image-search tests passed"

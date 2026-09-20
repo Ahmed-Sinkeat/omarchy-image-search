@@ -11,6 +11,8 @@
 
 MODE=smart
 ENGINE=google
+SOURCE=capture
+SOURCE_PATH=""
 PRIVATE=false
 FREEZE_PID=""
 CAPTURE_FILE=""
@@ -63,29 +65,34 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for arg in "$@"; do
-  case $arg in
+usage() {
+  echo "Usage: omarchy-capture-image-search [--private] [--bing]" \
+    "[--file PATH | --clipboard | smart|region|windows|fullscreen]" >&2
+  exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
   --private) PRIVATE=true ;;
   --bing) ENGINE=bing ;;
-  smart | region | windows | fullscreen) MODE=$arg ;;
-  *)
-    echo "Usage: omarchy-capture-image-search [--private] [--bing] [smart|region|windows|fullscreen]" >&2
-    exit 2
+  --clipboard) SOURCE=clipboard ;;
+  --file)
+    SOURCE="file"
+    SOURCE_PATH=${2:-}
+    [[ -n $SOURCE_PATH ]] || usage
+    shift
     ;;
+  smart | region | windows | fullscreen) MODE=$1 ;;
+  *) usage ;;
   esac
+  shift
 done
 
 # Match the stock screenshot command: pressing another capture shortcut while
 # a selector is already open dismisses that selector instead of stacking two.
-pkill slurp && exit 0
-
-CURSOR_SETTING=$(hyprctl getoption cursor:no_hardware_cursors -j 2>/dev/null | jq -r '.int // empty')
-if [[ -n $CURSOR_SETTING ]] && set_no_hardware_cursors 0; then
-  CURSOR_CHANGED=true
+if [[ $SOURCE == capture ]]; then
+  pkill slurp && exit 0
 fi
-
-{ read -r FREEZE_PID; read -r SELECTION; } < <(omarchy-capture-region "$MODE" --keep-freeze)
-[[ -n ${SELECTION:-} ]] || exit 0
 
 RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp}
 
@@ -95,19 +102,44 @@ find "$RUNTIME_DIR" -maxdepth 1 -name 'omarchy-image-search.*' \
   -mmin "+$STALE_PAGE_MINUTES" -delete 2>/dev/null
 
 CAPTURE_FILE=$(mktemp --tmpdir="$RUNTIME_DIR" omarchy-image-search.XXXXXX.png) || {
-  release_capture_state
   notify_failure "Could not create a temporary capture"
   exit 1
 }
 
-if ! grim -g "$SELECTION" "$CAPTURE_FILE" || [[ ! -s $CAPTURE_FILE ]]; then
-  release_capture_state
-  notify_failure "Could not capture the selected region"
-  exit 1
-fi
+case $SOURCE in
+capture)
+  CURSOR_SETTING=$(hyprctl getoption cursor:no_hardware_cursors -j 2>/dev/null | jq -r '.int // empty')
+  if [[ -n $CURSOR_SETTING ]] && set_no_hardware_cursors 0; then
+    CURSOR_CHANGED=true
+  fi
 
-# The image is complete now; restore the desktop before doing any networking.
-release_capture_state
+  { read -r FREEZE_PID; read -r SELECTION; } < <(omarchy-capture-region "$MODE" --keep-freeze)
+  [[ -n ${SELECTION:-} ]] || exit 0
+
+  if ! grim -g "$SELECTION" "$CAPTURE_FILE" || [[ ! -s $CAPTURE_FILE ]]; then
+    release_capture_state
+    notify_failure "Could not capture the selected region"
+    exit 1
+  fi
+
+  # The image is complete now; restore the desktop before doing any networking.
+  release_capture_state
+  ;;
+file)
+  # Copied rather than read in place: everything downstream deletes its input,
+  # and that input must never be the caller's own file.
+  if ! cp -- "$SOURCE_PATH" "$CAPTURE_FILE" 2>/dev/null || [[ ! -s $CAPTURE_FILE ]]; then
+    notify_failure "Could not read $SOURCE_PATH"
+    exit 1
+  fi
+  ;;
+clipboard)
+  if ! wl-paste --type image/png >"$CAPTURE_FILE" 2>/dev/null || [[ ! -s $CAPTURE_FILE ]]; then
+    notify_failure "No image in the clipboard"
+    exit 1
+  fi
+  ;;
+esac
 
 if [[ $ENGINE == bing ]]; then
   RESIZE_TO=$BING_MAX_DIMENSION

@@ -20,6 +20,7 @@ Omarchy provides most of these already:
 | `pkill` (procps-ng) | dismissing an already-open selector |
 | `base64`, `mktemp`, `date`, `find` (coreutils) | building the upload page, sweeping stale ones |
 | `curl` | `--bing` only |
+| `wl-paste` (wl-clipboard) | `--clipboard` only |
 | `magick` (imagemagick, optional) | capping capture size before upload |
 | `setsid` (util-linux) | deleting the page after the browser reads it |
 | `omarchy-capture-region`, `omarchy-launch-browser`, `omarchy-notification-send` | Omarchy |
@@ -44,12 +45,18 @@ Then `hyprctl reload`.
 ## Usage
 
 ```
-omarchy-capture-image-search [--private] [--bing] [smart|region|windows|fullscreen]
+omarchy-capture-image-search [--private] [--bing] \
+  [--file PATH | --clipboard | smart|region|windows|fullscreen]
 ```
 
 Drag to select a region, or click once to snap to a window. Results open in
 about 1–2 seconds, as a tab in your running browser (`--private` gets its own
 incognito window, since that is what an incognito flag does).
+
+`--file PATH` searches an image you already have, and `--clipboard` searches the
+image currently copied — neither touches the screen or opens a selector. The
+file you pass is copied, never consumed: everything downstream deletes its own
+input, so it must never be given yours.
 
 `--bing` searches Bing instead. It needs no local page at all — Bing answers an
 anonymous upload with a result URL that stands on its own. Useful as a fallback
@@ -107,6 +114,20 @@ Other routes were tried and measured, not guessed:
 | Automating the GTK file chooser | Works, but needs AT-SPI, `wtype`, and window polling — ~200 extra lines. |
 | Chrome DevTools `DOM.setFileInputFiles` | Injects the file but never submits; also needs a debug port on your daily browser. |
 | Bing anonymous upload | Works via plain `curl`. Shipped as `--bing`, but it identifies images far less accurately, and rejects payloads past roughly a megabyte. |
+
+## Using it from another program
+
+The command is the integration point. To search an image from your own tool,
+call it with a path:
+
+```sh
+omarchy-capture-image-search --file /path/to/image.png
+```
+
+[Clipstack](https://github.com/Ahmed-Sinkeat/omarchy-clipstack) uses this to
+search any image in clipboard history. Gate the action on
+`command -v omarchy-capture-image-search` so it degrades quietly when the tool
+is not installed.
 
 ## Limitations
 
