@@ -28,6 +28,24 @@ Omarchy provides most of these already:
 
 ## Install
 
+As an Omarchy plugin, which also handles updates:
+
+```sh
+omarchy plugin add https://github.com/Ahmed-Sinkeat/omarchy-image-search.git
+omarchy plugin update sinkeat.image-search   # later
+```
+
+This is a command, not a shell component — the plugin system is used here for
+installation and updates, and the Quickshell side loads nothing. Bind the
+installed copy directly:
+
+```lua
+o.bind("SUPER + ALT + PRINT", "Search screen with Google Lens", "~/.config/omarchy/plugins/sinkeat.image-search/omarchy-capture-image-search")
+o.bind("SUPER + SHIFT + ALT + PRINT", "Search screen with Google Lens (private)", "~/.config/omarchy/plugins/sinkeat.image-search/omarchy-capture-image-search --private")
+```
+
+Or from a clone, which puts it on your `PATH` instead:
+
 ```sh
 ./install.sh
 ```

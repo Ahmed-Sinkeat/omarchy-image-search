@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "sinkeat.image-search",
+  "name": "Image Search",
+  "version": "0.1.0",
+  "author": "Ahmed Sinkeat",
+  "description": "Reverse image search a selected screen region with Google Lens",
+  "kinds": [
+    "command"
+  ],
+  "entryPoints": {}
+}
