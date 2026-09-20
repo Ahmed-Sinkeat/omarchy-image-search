@@ -215,4 +215,17 @@ fi
 unset CLIP_PAYLOAD
 grep -F 'No image in the clipboard' "$LOG_FILE" >/dev/null
 
+# --- numeric settings are refused, not evaluated ----------------------------
+# [[ -gt ]] evaluates arithmetic, and bash runs a command substitution it finds
+# in an operand's array subscript.
+for var in LENS_PAGE_TTL LENS_STALE_MINUTES LENS_MAX_DIMENSION BING_MAX_DIMENSION; do
+  no_freeze
+  rm -f "$TEST_DIR/pwned"
+  if env "$var=x[\$(touch $TEST_DIR/pwned)]" "$SCRIPT" smart >/dev/null 2>&1; then
+    echo "$var: a non-numeric value unexpectedly succeeded" >&2
+    exit 1
+  fi
+  [[ ! -e $TEST_DIR/pwned ]] || { echo "$var: a non-numeric value was evaluated" >&2; exit 1; }
+done
+
 echo "image-search tests passed"

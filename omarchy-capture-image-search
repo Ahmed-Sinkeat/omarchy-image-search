@@ -33,6 +33,17 @@ MAX_DIMENSION=${LENS_MAX_DIMENSION:-2000}
 # past it, so Bing gets a JPEG instead.
 BING_MAX_DIMENSION=${BING_MAX_DIMENSION:-1600}
 
+# RESIZE_TO reaches [[ -gt ]], which evaluates arithmetic, and bash runs a
+# command substitution it finds in an arithmetic operand's array subscript. The
+# other two are passed to find and sleep, where a bad value fails loudly rather
+# than quietly skipping a sweep or a cleanup. Refuse anything but digits.
+for name in PAGE_TTL STALE_PAGE_MINUTES MAX_DIMENSION BING_MAX_DIMENSION; do
+  [[ ${!name} =~ ^[0-9]+$ ]] || {
+    printf 'image-search: %s must be a number\n' "$name" >&2
+    exit 1
+  }
+done
+
 notify_failure() {
   omarchy-notification-send -g "" -u critical "Visual search failed" "$1" || true
 }
