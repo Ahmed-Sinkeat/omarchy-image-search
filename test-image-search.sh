@@ -10,7 +10,9 @@ mkdir -p "$BIN_DIR" "$TEST_DIR/runtime"
 chmod 700 "$TEST_DIR/runtime"
 
 cleanup() {
-  [[ -n ${FREEZE_PROCESS:-} ]] && kill "$FREEZE_PROCESS" 2>/dev/null || true
+  if [[ -n ${FREEZE_PROCESS:-} ]]; then
+    kill "$FREEZE_PROCESS" 2>/dev/null || true
+  fi
   rm -rf -- "$TEST_DIR"
 }
 trap cleanup EXIT

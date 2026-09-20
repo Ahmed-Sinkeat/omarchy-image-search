@@ -12,6 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Pinned so a runner image upgrade cannot turn CI red on its own.
+      - name: Install shellcheck
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ --strip-components=1 -C /usr/local/bin "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          shellcheck --version
+        env:
+          SHELLCHECK_VERSION: 0.11.0
+
       - name: Lint
         run: shellcheck omarchy-capture-image-search install.sh test-image-search.sh
 
