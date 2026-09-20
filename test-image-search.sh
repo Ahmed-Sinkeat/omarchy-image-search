@@ -36,12 +36,25 @@ stub omarchy-launch-browser \
   'kill -0 "$FREEZE_PROCESS" 2>/dev/null && { echo "freeze still alive at browser launch" >&2; exit 90; }' \
   'printf "browser %s\n" "$*" >>"$LOG_FILE"' \
   '[[ ${BROWSER_FAIL:-false} == true ]] && exit 1' \
-  'page=${@: -1}; cp "${page#file://}" "$PAGE_COPY"' \
+  'page=${@: -1}; [[ $page == file://* ]] && cp "${page#file://}" "$PAGE_COPY"' \
   'exit 0'
 stub omarchy-notification-send 'printf "notify %s\n" "$*" >>"$LOG_FILE"'
-for forbidden in wtype gdbus curl; do
+stub magick 'printf "magick %s\n" "$*" >>"$LOG_FILE"' 'cp "$1" "${@: -1}"'
+stub curl \
+  'printf "curl %s\n" "$*" >>"$LOG_FILE"' \
+  '[[ ${BING_EMPTY:-false} == true ]] && exit 0' \
+  'printf "https://www.bing.com/images/search?view=detailV2\n"'
+for forbidden in wtype gdbus; do
   stub "$forbidden" 'echo "'"$forbidden"' must not be used" >&2; exit 99'
 done
+
+# A bare `! grep` is a no-op under set -e, so negative assertions go through here.
+refute() {
+  if grep -F -e "$1" "$LOG_FILE" >/dev/null; then
+    echo "$2" >&2
+    exit 1
+  fi
+}
 
 export PATH="$BIN_DIR:$PATH"
 export XDG_RUNTIME_DIR="$TEST_DIR/runtime"
@@ -64,7 +77,12 @@ start_freeze
 
 CAPTURE_PATH=$(<"$CAPTURE_PATH_LOG")
 [[ ! -e $CAPTURE_PATH ]] || { echo "capture PNG was not removed" >&2; exit 1; }
-grep -F -- '--private --new-window file://' "$LOG_FILE" >/dev/null
+grep -E -- 'browser --private file:///' "$LOG_FILE" >/dev/null
+# A tab in the running browser, not another window.
+refute '--new-window' "browser was asked for a new window"
+# Only ever shrinks, never enlarges.
+grep -F -- '-resize 2000x2000>' "$LOG_FILE" >/dev/null
+refute 'curl ' "the google path must not shell out to curl"
 # base64 of the stub's "fake-png" payload must be embedded in the page
 grep -F 'atob("ZmFrZS1wbmc=")' "$PAGE_COPY" >/dev/null
 grep -F 'action="https://lens.google.com/v3/upload?ep=ccm&s=&st=' "$PAGE_COPY" >/dev/null
@@ -86,5 +104,53 @@ CAPTURE_PATH=$(<"$CAPTURE_PATH_LOG")
 [[ -z $(find "$XDG_RUNTIME_DIR" -name 'omarchy-image-search.*') ]] ||
   { echo "upload page leaked after browser failure" >&2; exit 1; }
 grep -F 'Could not open the default browser' "$LOG_FILE" >/dev/null
+
+# --- stale page sweep ------------------------------------------------------
+start_freeze
+STALE="$XDG_RUNTIME_DIR/omarchy-image-search.STALE.html"
+: >"$STALE"
+touch -d '10 minutes ago' "$STALE"
+FRESH="$XDG_RUNTIME_DIR/keep-me.html"
+: >"$FRESH"
+touch -d '10 minutes ago' "$FRESH"
+"$SCRIPT" smart
+[[ ! -e $STALE ]] || { echo "stale page was not swept" >&2; exit 1; }
+[[ -e $FRESH ]] || { echo "sweep removed an unrelated file" >&2; exit 1; }
+# Without --private the browser gets the page and nothing else.
+grep -E -- 'browser file:///' "$LOG_FILE" >/dev/null
+refute '--private' "private flag leaked into a normal search"
+
+# --- bing engine -----------------------------------------------------------
+start_freeze
+"$SCRIPT" --bing smart
+grep -F -- 'imageBin=<' "$LOG_FILE" >/dev/null
+# Bing gets a size-capped JPEG, not the full PNG.
+grep -F -- '-resize 1600x1600>' "$LOG_FILE" >/dev/null
+grep -E -- 'magick .*\.scaled\.jpg' "$LOG_FILE" >/dev/null
+grep -F -- 'browser https://www.bing.com/' "$LOG_FILE" >/dev/null
+[[ -z $(find "$XDG_RUNTIME_DIR" -name 'omarchy-image-search.*') ]] ||
+  { echo "bing run left files behind" >&2; exit 1; }
+
+# --- bing returning nothing ------------------------------------------------
+start_freeze
+BING_EMPTY=true
+export BING_EMPTY
+if "$SCRIPT" --bing smart; then
+  echo "empty bing result unexpectedly succeeded" >&2
+  exit 1
+fi
+unset BING_EMPTY
+grep -F 'Bing did not return a result' "$LOG_FILE" >/dev/null
+[[ -z $(find "$XDG_RUNTIME_DIR" -name 'omarchy-image-search.*') ]] ||
+  { echo "failed bing run leaked files" >&2; exit 1; }
+
+# --- resize failure must not destroy the capture ---------------------------
+start_freeze
+stub magick 'exit 1'
+"$SCRIPT" smart
+grep -F 'Could not resize the capture' "$LOG_FILE" >/dev/null
+grep -E -- 'browser file:///' "$LOG_FILE" >/dev/null
+grep -F 'atob("ZmFrZS1wbmc=")' "$PAGE_COPY" >/dev/null
+stub magick 'printf "magick %s\n" "$*" >>"$LOG_FILE"' 'cp "$1" "${@: -1}"'
 
 echo "image-search tests passed"

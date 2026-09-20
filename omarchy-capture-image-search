@@ -1,24 +1,35 @@
 #!/bin/bash
 
-# Search a selected screen region with Google Lens.
+# Search a selected screen region with Google Lens, or with Bing.
 #
-# The capture never leaves the user-private XDG runtime directory. A throwaway
-# local page re-creates it as a browser File and submits Google's own upload
-# form, so the upload and the results share one browser session. A top-level
-# form POST is exempt from CORS, which is why this works where an in-page
-# fetch() and a bare curl upload both fail.
+# The capture never leaves the user-private XDG runtime directory. For Lens, a
+# throwaway local page re-creates it as a browser File and submits Google's own
+# upload form, so the upload and the results share one browser session. A
+# top-level form POST is exempt from CORS, which is why this works where an
+# in-page fetch() and a bare curl upload both fail. Bing needs none of that: it
+# hands back a result URL that renders on its own.
 
 MODE=smart
+ENGINE=google
 PRIVATE=false
 FREEZE_PID=""
 CAPTURE_FILE=""
 PAGE_FILE=""
+ENCODED_FILE=""
 HANDED_OFF=false
 CURSOR_SETTING=""
 CURSOR_CHANGED=false
 
-# The browser must still be able to read the page after this script exits.
-PAGE_TTL=${LENS_PAGE_TTL:-30}
+# The browser must still be able to read the page after this script exits. A
+# page left behind by a killed cleanup is swept on the next run instead.
+PAGE_TTL=${LENS_PAGE_TTL:-120}
+STALE_PAGE_MINUTES=${LENS_STALE_MINUTES:-5}
+
+# Lens gains nothing from a 4K capture, and the page carries the image inline.
+MAX_DIMENSION=${LENS_MAX_DIMENSION:-2000}
+# Bing refuses payloads past roughly a megabyte, and a fullscreen PNG is well
+# past it, so Bing gets a JPEG instead.
+BING_MAX_DIMENSION=${BING_MAX_DIMENSION:-1600}
 
 notify_failure() {
   omarchy-notification-send -g "" -u critical "Visual search failed" "$1" || true
@@ -44,6 +55,7 @@ release_capture_state() {
 cleanup() {
   release_capture_state
   [[ -n $CAPTURE_FILE ]] && rm -f -- "$CAPTURE_FILE"
+  [[ -n $ENCODED_FILE ]] && rm -f -- "$ENCODED_FILE"
   [[ $HANDED_OFF == false && -n $PAGE_FILE ]] && rm -f -- "$PAGE_FILE"
 }
 
@@ -54,9 +66,10 @@ trap 'exit 143' TERM
 for arg in "$@"; do
   case $arg in
   --private) PRIVATE=true ;;
+  --bing) ENGINE=bing ;;
   smart | region | windows | fullscreen) MODE=$arg ;;
   *)
-    echo "Usage: omarchy-capture-image-search [--private] [smart|region|windows|fullscreen]" >&2
+    echo "Usage: omarchy-capture-image-search [--private] [--bing] [smart|region|windows|fullscreen]" >&2
     exit 2
     ;;
   esac
@@ -75,6 +88,12 @@ fi
 [[ -n ${SELECTION:-} ]] || exit 0
 
 RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp}
+
+# Self-healing: a page whose delayed cleanup never ran would otherwise sit here
+# until logout, and it embeds the capture.
+find "$RUNTIME_DIR" -maxdepth 1 -name 'omarchy-image-search.*' \
+  -mmin "+$STALE_PAGE_MINUTES" -delete 2>/dev/null
+
 CAPTURE_FILE=$(mktemp --tmpdir="$RUNTIME_DIR" omarchy-image-search.XXXXXX.png) || {
   release_capture_state
   notify_failure "Could not create a temporary capture"
@@ -90,37 +109,86 @@ fi
 # The image is complete now; restore the desktop before doing any networking.
 release_capture_state
 
+if [[ $ENGINE == bing ]]; then
+  RESIZE_TO=$BING_MAX_DIMENSION
+  ENCODE_AS=jpg
+else
+  RESIZE_TO=$MAX_DIMENSION
+  ENCODE_AS=png
+fi
+
+# Only ever shrinks: the '>' flag leaves a smaller capture untouched.
+if [[ $RESIZE_TO -gt 0 ]] && command -v magick >/dev/null; then
+  # Never the input path: a failed in-place convert would destroy the capture.
+  CONVERTED=${CAPTURE_FILE%.*}.scaled.$ENCODE_AS
+  if magick "$CAPTURE_FILE" -resize "${RESIZE_TO}x${RESIZE_TO}>" -quality 85 \
+    -depth 8 "$CONVERTED" && [[ -s $CONVERTED ]]; then
+    rm -f -- "$CAPTURE_FILE"
+    CAPTURE_FILE=$CONVERTED
+  else
+    rm -f -- "$CONVERTED"
+    notify_failure "Could not resize the capture; uploading it at full size"
+  fi
+fi
+
 if ! ENCODED=$(base64 -w0 "$CAPTURE_FILE"); then
   notify_failure "Could not encode the capture"
   exit 1
 fi
 
-PAGE_FILE=$(mktemp --tmpdir="$RUNTIME_DIR" omarchy-image-search.XXXXXX.html) || {
-  notify_failure "Could not create the upload page"
-  exit 1
-}
+if [[ $ENGINE == bing ]]; then
+  # Bing answers an anonymous upload with a result URL that stands on its own,
+  # so no local page is needed. The payload goes through a file because a single
+  # argv string is capped well below the size of a real screenshot.
+  ENCODED_FILE=$(mktemp --tmpdir="$RUNTIME_DIR" omarchy-image-search.XXXXXX.b64) || {
+    notify_failure "Could not stage the upload"
+    exit 1
+  }
+  printf '%s' "$ENCODED" >"$ENCODED_FILE"
 
-{
-  printf '<!doctype html><meta charset=utf-8><title>Google Lens</title>\n'
-  printf '<body style="margin:0;background:#101010">\n'
-  printf '<form id=f method=POST enctype="multipart/form-data" '
-  printf 'action="https://lens.google.com/v3/upload?ep=ccm&s=&st=%s">' "$(date +%s%3N)"
-  printf '<input type=file id=i name=encoded_image></form>\n<script>\n'
-  printf 'const b=atob("%s"),u=new Uint8Array(b.length);\n' "$ENCODED"
-  printf 'for(let n=0;n<b.length;n++)u[n]=b.charCodeAt(n);\n'
-  printf 'const d=new DataTransfer();\n'
-  printf 'd.items.add(new File([u],"capture.png",{type:"image/png"}));\n'
-  printf 'i.files=d.files;f.submit();\n</script>\n'
-} >"$PAGE_FILE"
+  TARGET=$(curl -sS -o /dev/null -w '%{redirect_url}' --max-time 30 \
+    -F "imgurl=" -F "cbir=sbi" -F "imageBin=<$ENCODED_FILE" \
+    "https://www.bing.com/images/search?view=detailv2&iss=sbiupload")
 
-# The page carries its own copy of the image; the PNG is no longer needed.
-rm -f -- "$CAPTURE_FILE"
-CAPTURE_FILE=""
+  rm -f -- "$CAPTURE_FILE" "$ENCODED_FILE"
+  CAPTURE_FILE=""
+  ENCODED_FILE=""
 
-if [[ $PRIVATE == true ]]; then
-  BROWSER_ARGS=(--private --new-window "file://$PAGE_FILE")
+  if [[ $TARGET != https://* ]]; then
+    notify_failure "Bing did not return a result"
+    exit 1
+  fi
 else
-  BROWSER_ARGS=(--new-window "file://$PAGE_FILE")
+  PAGE_FILE=$(mktemp --tmpdir="$RUNTIME_DIR" omarchy-image-search.XXXXXX.html) || {
+    notify_failure "Could not create the upload page"
+    exit 1
+  }
+
+  {
+    printf '<!doctype html><meta charset=utf-8><title>Google Lens</title>\n'
+    printf '<body style="margin:0;background:#101010">\n'
+    printf '<form id=f method=POST enctype="multipart/form-data" '
+    printf 'action="https://lens.google.com/v3/upload?ep=ccm&s=&st=%s">' "$(date +%s%3N)"
+    printf '<input type=file id=i name=encoded_image></form>\n<script>\n'
+    printf 'const b=atob("%s"),u=new Uint8Array(b.length);\n' "$ENCODED"
+    printf 'for(let n=0;n<b.length;n++)u[n]=b.charCodeAt(n);\n'
+    printf 'const d=new DataTransfer();\n'
+    printf 'd.items.add(new File([u],"capture.png",{type:"image/png"}));\n'
+    printf 'i.files=d.files;f.submit();\n</script>\n'
+  } >"$PAGE_FILE"
+
+  # The page carries its own copy of the image; the PNG is no longer needed.
+  rm -f -- "$CAPTURE_FILE"
+  CAPTURE_FILE=""
+  TARGET="file://$PAGE_FILE"
+fi
+
+# A tab in the already-running browser rather than another window. --private
+# still gets its own window, since that is what an incognito flag does.
+if [[ $PRIVATE == true ]]; then
+  BROWSER_ARGS=(--private "$TARGET")
+else
+  BROWSER_ARGS=("$TARGET")
 fi
 
 if ! omarchy-launch-browser "${BROWSER_ARGS[@]}"; then
@@ -128,7 +196,9 @@ if ! omarchy-launch-browser "${BROWSER_ARGS[@]}"; then
   exit 1
 fi
 
-# ponytail: fixed grace period rather than watching the browser read the page.
-# Raise LENS_PAGE_TTL if a cold browser start ever outruns it.
-HANDED_OFF=true
-setsid --fork sh -c 'sleep "$1"; rm -f -- "$2"' _ "$PAGE_TTL" "$PAGE_FILE" &>/dev/null
+if [[ -n $PAGE_FILE ]]; then
+  # ponytail: fixed grace period rather than watching the browser read the page.
+  # A page this outlives is swept by the next run, so it cannot leak for long.
+  HANDED_OFF=true
+  setsid --fork sh -c 'sleep "$1"; rm -f -- "$2"' _ "$PAGE_TTL" "$PAGE_FILE" &>/dev/null
+fi
