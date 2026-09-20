@@ -115,6 +115,20 @@ Other routes were tried and measured, not guessed:
 | Chrome DevTools `DOM.setFileInputFiles` | Injects the file but never submits; also needs a debug port on your daily browser. |
 | Bing anonymous upload | Works via plain `curl`. Shipped as `--bing`, but it identifies images far less accurately, and rejects payloads past roughly a megabyte. |
 
+## Omarchy menu entry
+
+Omarchy merges `~/.config/omarchy/extensions/omarchy-menu.jsonc` over its own
+menu, so this needs no plugin. Paste these rows in to get an **Image Search**
+group under **Capture**; the `when` clause hides the whole group on machines
+where the command is not installed.
+
+```jsonc
+"trigger.capture.image-search": {"icon":"󰍉","label":"Image Search","aliases":["lens","reverse","image search"],"when":"command -v omarchy-capture-image-search"},
+"trigger.capture.image-search.google": {"icon":"󰍉","label":"Google Lens","action":"omarchy-capture-image-search"},
+"trigger.capture.image-search.private": {"icon":"󰗹","label":"Google Lens (private)","action":"omarchy-capture-image-search --private"},
+"trigger.capture.image-search.bing": {"icon":"󰖟","label":"Bing","action":"omarchy-capture-image-search --bing"}
+```
+
 ## Using it from another program
 
 The command is the integration point. To search an image from your own tool,
