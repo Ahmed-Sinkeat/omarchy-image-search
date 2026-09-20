@@ -60,6 +60,19 @@ o.bind("SUPER + SHIFT + ALT + PRINT", "Search screen with Google Lens (private)"
 
 Then `hyprctl reload`.
 
+## Remove
+
+```bash
+omarchy plugin remove sinkeat.image-search
+```
+
+Or, if it was installed from a clone, delete
+`~/.local/bin/omarchy-capture-image-search`.
+
+Either way, remove the two lines from `~/.config/hypr/bindings.lua` and run
+`hyprctl reload`. Nothing else is left behind: captures live only in
+`$XDG_RUNTIME_DIR` and are deleted after each search.
+
 ## Usage
 
 ```
